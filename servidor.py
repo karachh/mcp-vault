@@ -1,4 +1,5 @@
 import json
+import re
 import unicodedata
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from mcp.server.mcpserver import MCPServer
 VAULT = Path.home() / "Documentos/Vaults/1-Tributech"
 CATALOGO = VAULT / "20-Banco/_gerado"
 DIFERENCAS = CATALOGO / "_diferencas"
+ISSUES = VAULT / "10-Issues"
 
 # Banco usado para gerar o catálogo. Troque aqui se a referência mudar.
 REFERENCIA = "geon_pr_novaesperanca"
@@ -105,6 +107,67 @@ def estrutura_tabela(tabela: str, municipio: str | None = None) -> str:
         f"## Diferenças em {dif['banco']}\n{descrever_diferencas(chave, dif)}\n\n"
         f"## Estrutura de referência\n{estrutura}"
     )
+
+
+def ler_frontmatter(texto):
+    """Lê o bloco entre '---' do topo da nota e devolve {campo: valor em texto}.
+    Simples de propósito: cobre 'campo: valor', 'campo: [a, b]' e listas com '- item'."""
+    linhas = texto.splitlines()
+    if not linhas or linhas[0].strip() != "---":
+        return {}
+    campos, atual = {}, None
+    for linha in linhas[1:]:
+        if linha.strip() == "---":
+            break
+        if linha.startswith((" ", "-")) and atual:
+            campos[atual] += " " + linha.strip().lstrip("-").strip()
+        elif ":" in linha:
+            atual, valor = linha.split(":", 1)
+            atual = atual.strip()
+            campos[atual] = valor.strip()
+    return campos
+
+
+def limpar_valor(valor):
+    """'["[[Astorga]]", "[[Assaí]]"]' -> 'Astorga, Assaí'."""
+    itens = re.split(r",|\s{2,}", re.sub(r'[\[\]"\']', "", valor or ""))
+    return ", ".join(item.strip() for item in itens if item.strip())
+
+
+@mcp.tool()
+def issues_da_tabela(tabela: str) -> str:
+    """Lista as issues do vault que citam uma tabela do banco, no frontmatter ou no texto.
+
+    tabela: 'schema.tabela' (ex: 'imobiliario.edificacao') ou só o nome da tabela.
+    Devolve só um resumo numerado. Para ver uma issue inteira, use ler_issue."""
+    padrao = re.compile(rf"(?<![\w]){re.escape(tabela)}(?!\w)", re.IGNORECASE)
+    achadas = []
+    for nota in sorted(ISSUES.glob("*.md")):
+        texto = nota.read_text(encoding="utf-8")
+        if padrao.search(texto):
+            campos = ler_frontmatter(texto)
+            municipio = limpar_valor(campos.get("municipios")) or "município não informado"
+            status = limpar_valor(campos.get("status")) or "sem status"
+            achadas.append(f"{municipio} · {nota.stem} ({status})")
+
+    if not achadas:
+        return f"Nenhuma issue cita a tabela '{tabela}'."
+
+    lista = "\n".join(f"{i} - {item}" for i, item in enumerate(achadas, start=1))
+    return (
+        f"{len(achadas)} issue(s) citam '{tabela}':\n\n{lista}\n\n"
+        "INSTRUÇÃO: mostre esta lista ao usuário exatamente assim, sem analisar as issues, "
+        "e pergunte qual número ele quer aprofundar. Depois use ler_issue com o id escolhido."
+    )
+
+
+@mcp.tool()
+def ler_issue(id_issue: str) -> str:
+    """Retorna a nota completa de uma issue pelo número (ex: '2890')."""
+    achadas = sorted(ISSUES.glob(f"{id_issue.strip()}*.md"))
+    if not achadas:
+        return f"Nenhuma issue com o número '{id_issue}' em 10-Issues."
+    return achadas[0].read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":
